@@ -245,10 +245,21 @@ const createParlay = async (req, res) => {
       status: 'pending'
     }, { transaction });
 
+    // MODIFICACIÓN: Asegurarse de que parlay_id esté definido y loguear para depuración
+    console.log("Parlay creado con ID:", parlay.parlay_id);
+    
+    if (!parlay.parlay_id) {
+      await transaction.rollback();
+      return res.status(500).json({
+        success: false,
+        message: 'Error al crear parlay: No se generó un ID válido'
+      });
+    }
+
     // Crear relaciones con los tips
     const parlayTipsPromises = tipIds.map(tipId => 
       ParlayTip.create({
-        parlay_id: parlay.parlay_id,
+        parlay_id: parlay.parlay_id, // Aseguramos que este valor no sea nulo
         tip_id: tipId
       }, { transaction })
     );
