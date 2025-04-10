@@ -29,11 +29,11 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE
   },
   reset_token: {
-    type: DataTypes.STRING,
+    type: DataTypes.VIRTUAL,
     allowNull: true
   },
   reset_token_expires: {
-    type: DataTypes.DATE,
+    type: DataTypes.VIRTUAL,
     allowNull: true
   }
 }, {
