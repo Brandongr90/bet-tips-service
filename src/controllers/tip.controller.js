@@ -1,36 +1,79 @@
-const { Tip, Sport, League, User, Profile, Odds, Bookmaker, TipStat, TipView } = require('../models');
-const logger = require('../utils/logger');
-const { sequelize } = require('../config/database');
-const { Op } = require('sequelize');
+const {
+  Tip,
+  Sport,
+  League,
+  User,
+  Profile,
+  Odds,
+  Bookmaker,
+  TipStat,
+  TipView,
+} = require("../models");
+const logger = require("../utils/logger");
+const { sequelize } = require("../config/database");
+const { Op } = require("sequelize");
 
 /**
  * Obtiene todos los tips con filtros opcionales
  */
 const getTips = async (req, res) => {
   try {
-    const { 
-      sportId, 
-      leagueId, 
-      status, 
-      matchStatus, 
-      startDate, 
-      endDate, 
+    const userId = req.user.id;
+    const {
+      sportId,
+      leagueId,
+      status,
+      matchStatus,
+      startDate,
+      endDate,
       creatorId,
       page = 1,
       limit = 10,
-      sortBy = 'match_datetime',
-      sortDir = 'DESC'
+      sortBy = "match_datetime",
+      sortDir = "DESC",
     } = req.query;
 
-    // Construir condiciones de filtrado
-    const where = {};
-    
+    // 1. Primero obtenemos todos los tips a los que el usuario tiene acceso por suscripción
+    const accessibleTips = await sequelize.query(
+      "SELECT tip_id FROM get_accessible_tips(:userId)",
+      {
+        replacements: { userId },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    // Si no hay tips accesibles, devolvemos array vacío
+    if (!accessibleTips || accessibleTips.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          tips: [],
+          pagination: {
+            total: 0,
+            pages: 0,
+            currentPage: parseInt(page),
+            limit: parseInt(limit),
+          },
+        },
+      });
+    }
+
+    // Extraer los IDs de tips accesibles
+    const accessibleTipIds = accessibleTips.map((tip) => tip.tip_id);
+
+    // 2. Construir condiciones de filtrado manteniendo los filtros originales
+    const where = {
+      tip_id: {
+        [Op.in]: accessibleTipIds, // Solo incluir los tips accesibles
+      },
+    };
+
     if (sportId) where.sport_id = sportId;
     if (leagueId) where.league_id = leagueId;
     if (status) where.tip_status = status;
     if (matchStatus) where.match_status = matchStatus;
     if (creatorId) where.creator_id = creatorId;
-    
+
     // Filtro de fechas
     if (startDate || endDate) {
       where.match_datetime = {};
@@ -41,52 +84,52 @@ const getTips = async (req, res) => {
     // Calcular offset para paginación
     const offset = (page - 1) * limit;
 
-    // Obtener tips con relaciones
+    // 3. Obtener tips con relaciones, aplicando todos los filtros
     const { count, rows } = await Tip.findAndCountAll({
       where,
       include: [
         {
           model: Sport,
-          as: 'sport',
-          attributes: ['sport_id', 'name']
+          as: "sport",
+          attributes: ["sport_id", "name"],
         },
         {
           model: League,
-          as: 'league',
-          attributes: ['league_id', 'name', 'country']
+          as: "league",
+          attributes: ["league_id", "name", "country"],
         },
         {
           model: User,
-          as: 'creator',
-          attributes: ['user_id', 'email'],
+          as: "creator",
+          attributes: ["user_id", "email"],
           include: [
             {
               model: Profile,
-              as: 'profile',
-              attributes: ['first_name', 'last_name', 'avatar_url']
-            }
-          ]
+              as: "profile",
+              attributes: ["first_name", "last_name", "avatar_url"],
+            },
+          ],
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker',
-              attributes: ['bookmaker_id', 'name']
-            }
-          ]
+              as: "bookmaker",
+              attributes: ["bookmaker_id", "name"],
+            },
+          ],
         },
         {
           model: TipStat,
-          as: 'stats',
-          attributes: ['views', 'likes', 'shares']
-        }
+          as: "stats",
+          attributes: ["views", "likes", "shares"],
+        },
       ],
       order: [[sortBy, sortDir]],
       limit: parseInt(limit),
-      offset
+      offset,
     });
 
     // Calcular páginas totales
@@ -100,16 +143,16 @@ const getTips = async (req, res) => {
           total: count,
           pages: totalPages,
           currentPage: parseInt(page),
-          limit: parseInt(limit)
-        }
-      }
+          limit: parseInt(limit),
+        },
+      },
     });
   } catch (error) {
-    logger.error('Error al obtener tips:', error);
+    logger.error("Error al obtener tips:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener tips',
-      error: error.message
+      message: "Error al obtener tips",
+      error: error.message,
     });
   }
 };
@@ -126,68 +169,65 @@ const getTipById = async (req, res) => {
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: User,
-          as: 'creator',
+          as: "creator",
           include: [
             {
               model: Profile,
-              as: 'profile'
-            }
-          ]
+              as: "profile",
+            },
+          ],
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker'
-            }
-          ]
+              as: "bookmaker",
+            },
+          ],
         },
         {
           model: TipStat,
-          as: 'stats'
-        }
-      ]
+          as: "stats",
+        },
+      ],
     });
 
     if (!tip) {
       return res.status(404).json({
         success: false,
-        message: 'Tip no encontrado'
+        message: "Tip no encontrado",
       });
     }
 
     // Registrar vista si el usuario está autenticado
     if (userId) {
       // Llamar a la función personalizada en PostgreSQL
-      await sequelize.query(
-        'SELECT increment_tip_view(:tipId, :userId)',
-        {
-          replacements: { tipId: id, userId },
-          type: sequelize.QueryTypes.SELECT
-        }
-      );
+      await sequelize.query("SELECT increment_tip_view(:tipId, :userId)", {
+        replacements: { tipId: id, userId },
+        type: sequelize.QueryTypes.SELECT,
+      });
     }
 
     res.json({
       success: true,
-      data: tip
+      data: tip,
     });
   } catch (error) {
-    logger.error('Error al obtener tip:', error);
+    logger.error("Error al obtener tip:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener tip',
-      error: error.message
+      message: "Error al obtener tip",
+      error: error.message,
     });
   }
 };
@@ -197,7 +237,7 @@ const getTipById = async (req, res) => {
  */
 const createTip = async (req, res) => {
   const transaction = await sequelize.transaction();
-  
+
   try {
     const userId = req.user.id;
     const {
@@ -211,39 +251,50 @@ const createTip = async (req, res) => {
       predictionType,
       predictionValue,
       confidence,
-      odds
+      odds,
+      subscriptionLevel
     } = req.body;
 
     // Crear el tip
-    const tip = await Tip.create({
-      title,
-      description,
-      sport_id: sportId,
-      league_id: leagueId,
-      team1_name: team1Name,
-      team2_name: team2Name,
-      match_datetime: new Date(matchDatetime),
-      prediction_type: predictionType,
-      prediction_value: predictionValue,
-      confidence,
-      creator_id: userId
-    }, { transaction });
+    const tip = await Tip.create(
+      {
+        title,
+        description,
+        sport_id: sportId,
+        league_id: leagueId,
+        team1_name: team1Name,
+        team2_name: team2Name,
+        match_datetime: new Date(matchDatetime),
+        prediction_type: predictionType,
+        prediction_value: predictionValue,
+        confidence,
+        creator_id: userId,
+        subscription_level: subscriptionLevel || 1
+      },
+      { transaction }
+    );
 
     // Crear estadísticas del tip
-    await TipStat.create({
-      tip_id: tip.tip_id
-    }, { transaction });
+    await TipStat.create(
+      {
+        tip_id: tip.tip_id,
+      },
+      { transaction }
+    );
 
     // Crear las cuotas/momios si existen
     if (odds && odds.length > 0) {
-      const oddsPromises = odds.map(odd => 
-        Odds.create({
-          tip_id: tip.tip_id,
-          bookmaker_id: odd.bookmakerId,
-          odds_value: odd.value
-        }, { transaction })
+      const oddsPromises = odds.map((odd) =>
+        Odds.create(
+          {
+            tip_id: tip.tip_id,
+            bookmaker_id: odd.bookmakerId,
+            odds_value: odd.value,
+          },
+          { transaction }
+        )
       );
-      
+
       await Promise.all(oddsPromises);
     }
 
@@ -254,37 +305,37 @@ const createTip = async (req, res) => {
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker'
-            }
-          ]
-        }
-      ]
+              as: "bookmaker",
+            },
+          ],
+        },
+      ],
     });
 
     res.status(201).json({
       success: true,
-      message: 'Tip creado exitosamente',
-      data: createdTip
+      message: "Tip creado exitosamente",
+      data: createdTip,
     });
   } catch (error) {
     await transaction.rollback();
-    logger.error('Error al crear tip:', error);
+    logger.error("Error al crear tip:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al crear tip',
-      error: error.message
+      message: "Error al crear tip",
+      error: error.message,
     });
   }
 };
@@ -294,7 +345,7 @@ const createTip = async (req, res) => {
  */
 const updateTip = async (req, res) => {
   const transaction = await sequelize.transaction();
-  
+
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -307,7 +358,8 @@ const updateTip = async (req, res) => {
       matchStatus,
       matchResult,
       tipStatus,
-      odds
+      odds,
+      subscriptionLevel
     } = req.body;
 
     // Verificar que el tip existe
@@ -316,7 +368,7 @@ const updateTip = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({
         success: false,
-        message: 'Tip no encontrado'
+        message: "Tip no encontrado",
       });
     }
 
@@ -325,50 +377,67 @@ const updateTip = async (req, res) => {
       await transaction.rollback();
       return res.status(403).json({
         success: false,
-        message: 'No tienes permiso para actualizar este tip'
+        message: "No tienes permiso para actualizar este tip",
+      });
+    }
+
+    // Verificar que solo admin puede cambiar nivel de suscripción a un nivel superior
+    if (subscriptionLevel && subscriptionLevel > tip.subscription_level && req.user.roleId !== 1) {
+      await transaction.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'Solo los administradores pueden aumentar el nivel de suscripción requerido'
       });
     }
 
     // Verificar que el tip no está completado o cancelado
-    if (tip.match_status === 'completed' || tip.match_status === 'cancelled') {
-      if (req.user.roleId !== 1) { // Solo admins pueden modificar tips completados
+    if (tip.match_status === "completed" || tip.match_status === "cancelled") {
+      if (req.user.roleId !== 1) {
+        // Solo admins pueden modificar tips completados
         await transaction.rollback();
         return res.status(400).json({
           success: false,
-          message: 'No se puede modificar un tip completado o cancelado'
+          message: "No se puede modificar un tip completado o cancelado",
         });
       }
     }
 
     // Actualizar el tip
-    await tip.update({
-      title: title || tip.title,
-      description: description || tip.description,
-      prediction_type: predictionType || tip.prediction_type,
-      prediction_value: predictionValue || tip.prediction_value,
-      confidence: confidence || tip.confidence,
-      match_status: matchStatus || tip.match_status,
-      match_result: matchResult || tip.match_result,
-      tip_status: tipStatus || tip.tip_status
-    }, { transaction });
+    await tip.update(
+      {
+        title: title || tip.title,
+        description: description || tip.description,
+        prediction_type: predictionType || tip.prediction_type,
+        prediction_value: predictionValue || tip.prediction_value,
+        confidence: confidence || tip.confidence,
+        match_status: matchStatus || tip.match_status,
+        match_result: matchResult || tip.match_result,
+        tip_status: tipStatus || tip.tip_status,
+        subscription_level: subscriptionLevel || tip.subscription_level
+      },
+      { transaction }
+    );
 
     // Actualizar cuotas si existen
     if (odds && odds.length > 0) {
       // Eliminar cuotas existentes
       await Odds.destroy({
         where: { tip_id: id },
-        transaction
+        transaction,
       });
 
       // Crear nuevas cuotas
-      const oddsPromises = odds.map(odd => 
-        Odds.create({
-          tip_id: id,
-          bookmaker_id: odd.bookmakerId,
-          odds_value: odd.value
-        }, { transaction })
+      const oddsPromises = odds.map((odd) =>
+        Odds.create(
+          {
+            tip_id: id,
+            bookmaker_id: odd.bookmakerId,
+            odds_value: odd.value,
+          },
+          { transaction }
+        )
       );
-      
+
       await Promise.all(oddsPromises);
     }
 
@@ -379,37 +448,37 @@ const updateTip = async (req, res) => {
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker'
-            }
-          ]
-        }
-      ]
+              as: "bookmaker",
+            },
+          ],
+        },
+      ],
     });
 
     res.json({
       success: true,
-      message: 'Tip actualizado exitosamente',
-      data: updatedTip
+      message: "Tip actualizado exitosamente",
+      data: updatedTip,
     });
   } catch (error) {
     await transaction.rollback();
-    logger.error('Error al actualizar tip:', error);
+    logger.error("Error al actualizar tip:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al actualizar tip',
-      error: error.message
+      message: "Error al actualizar tip",
+      error: error.message,
     });
   }
 };
@@ -419,7 +488,7 @@ const updateTip = async (req, res) => {
  */
 const deleteTip = async (req, res) => {
   const transaction = await sequelize.transaction();
-  
+
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -430,7 +499,7 @@ const deleteTip = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({
         success: false,
-        message: 'Tip no encontrado'
+        message: "Tip no encontrado",
       });
     }
 
@@ -439,26 +508,26 @@ const deleteTip = async (req, res) => {
       await transaction.rollback();
       return res.status(403).json({
         success: false,
-        message: 'No tienes permiso para eliminar este tip'
+        message: "No tienes permiso para eliminar este tip",
       });
     }
 
     // Eliminar cuotas asociadas
     await Odds.destroy({
       where: { tip_id: id },
-      transaction
+      transaction,
     });
 
     // Eliminar estadísticas
     await TipStat.destroy({
       where: { tip_id: id },
-      transaction
+      transaction,
     });
 
     // Eliminar vistas
     await TipView.destroy({
       where: { tip_id: id },
-      transaction
+      transaction,
     });
 
     // Eliminar tip
@@ -468,15 +537,15 @@ const deleteTip = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tip eliminado exitosamente'
+      message: "Tip eliminado exitosamente",
     });
   } catch (error) {
     await transaction.rollback();
-    logger.error('Error al eliminar tip:', error);
+    logger.error("Error al eliminar tip:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al eliminar tip',
-      error: error.message
+      message: "Error al eliminar tip",
+      error: error.message,
     });
   }
 };
@@ -486,20 +555,20 @@ const deleteTip = async (req, res) => {
  */
 const getPopularTips = async (req, res) => {
   try {
-    const { limit = 5, type = 'views' } = req.query;
+    const { limit = 5, type = "views" } = req.query;
 
     // Determinar por qué campo ordenar
     let orderField;
     switch (type) {
-      case 'likes':
-        orderField = 'likes';
+      case "likes":
+        orderField = "likes";
         break;
-      case 'shares':
-        orderField = 'shares';
+      case "shares":
+        orderField = "shares";
         break;
-      case 'views':
+      case "views":
       default:
-        orderField = 'views';
+        orderField = "views";
         break;
     }
 
@@ -507,44 +576,42 @@ const getPopularTips = async (req, res) => {
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: User,
-          as: 'creator',
+          as: "creator",
           include: [
             {
               model: Profile,
-              as: 'profile'
-            }
-          ]
+              as: "profile",
+            },
+          ],
         },
         {
           model: TipStat,
-          as: 'stats',
-          required: true
-        }
+          as: "stats",
+          required: true,
+        },
       ],
-      order: [
-        [{ model: TipStat, as: 'stats' }, orderField, 'DESC']
-      ],
-      limit: parseInt(limit)
+      order: [[{ model: TipStat, as: "stats" }, orderField, "DESC"]],
+      limit: parseInt(limit),
     });
 
     res.json({
       success: true,
-      data: tips
+      data: tips,
     });
   } catch (error) {
-    logger.error('Error al obtener tips populares:', error);
+    logger.error("Error al obtener tips populares:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener tips populares',
-      error: error.message
+      message: "Error al obtener tips populares",
+      error: error.message,
     });
   }
 };
@@ -556,51 +623,51 @@ const getLiveTips = async (req, res) => {
   try {
     const tips = await Tip.findAll({
       where: {
-        match_status: 'live'
+        match_status: "live",
       },
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: User,
-          as: 'creator',
+          as: "creator",
           include: [
             {
               model: Profile,
-              as: 'profile'
-            }
-          ]
+              as: "profile",
+            },
+          ],
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker'
-            }
-          ]
-        }
+              as: "bookmaker",
+            },
+          ],
+        },
       ],
-      order: [['match_datetime', 'ASC']]
+      order: [["match_datetime", "ASC"]],
     });
 
     res.json({
       success: true,
-      data: tips
+      data: tips,
     });
   } catch (error) {
-    logger.error('Error al obtener tips en vivo:', error);
+    logger.error("Error al obtener tips en vivo:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener tips en vivo',
-      error: error.message
+      message: "Error al obtener tips en vivo",
+      error: error.message,
     });
   }
 };
@@ -611,62 +678,62 @@ const getLiveTips = async (req, res) => {
 const getUpcomingTips = async (req, res) => {
   try {
     const { hours = 24, limit = 10 } = req.query;
-    
+
     const endDate = new Date();
     endDate.setHours(endDate.getHours() + parseInt(hours));
 
     const tips = await Tip.findAll({
       where: {
-        match_status: 'scheduled',
+        match_status: "scheduled",
         match_datetime: {
           [Op.gt]: new Date(),
-          [Op.lt]: endDate
-        }
+          [Op.lt]: endDate,
+        },
       },
       include: [
         {
           model: Sport,
-          as: 'sport'
+          as: "sport",
         },
         {
           model: League,
-          as: 'league'
+          as: "league",
         },
         {
           model: User,
-          as: 'creator',
+          as: "creator",
           include: [
             {
               model: Profile,
-              as: 'profile'
-            }
-          ]
+              as: "profile",
+            },
+          ],
         },
         {
           model: Odds,
-          as: 'odds',
+          as: "odds",
           include: [
             {
               model: Bookmaker,
-              as: 'bookmaker'
-            }
-          ]
-        }
+              as: "bookmaker",
+            },
+          ],
+        },
       ],
-      order: [['match_datetime', 'ASC']],
-      limit: parseInt(limit)
+      order: [["match_datetime", "ASC"]],
+      limit: parseInt(limit),
     });
 
     res.json({
       success: true,
-      data: tips
+      data: tips,
     });
   } catch (error) {
-    logger.error('Error al obtener tips próximos:', error);
+    logger.error("Error al obtener tips próximos:", error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener tips próximos',
-      error: error.message
+      message: "Error al obtener tips próximos",
+      error: error.message,
     });
   }
 };
@@ -679,5 +746,5 @@ module.exports = {
   deleteTip,
   getPopularTips,
   getLiveTips,
-  getUpcomingTips
+  getUpcomingTips,
 };
